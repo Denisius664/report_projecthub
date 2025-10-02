@@ -39,18 +39,74 @@
 - Формируется ответ и возвращается клиенту.
 
 Структура серверной части (модули):
-- Модуль аутентификации и авторизации: Регистрация и вход с валидацией; генерация и валидация JWT; контроль прав на основе ролей (админ, участник и т.д.).
-- Модуль управления пользователями: CRUD-операции для пользователей; управление ролями и связями с проектами.
-- Модуль управления проектами: CRUD-операции для проектов, предметных областей, участников; связи между проектами, фильтрация и поиск по метаданным.
-- Модуль работы с файлами: Загрузка, хранение метаданных, получение ссылок на файлы.
 - Интеграция с БД: Взаимодействие с PostgreSQL для структурированных данных.
 - Интеграция с хранилищем: Взаимодействие с MinIO для загрузки и получения файлов.
+- Вспомогательные модули.
+Остальные модули подробно обсуждаются в последующих разделах.
+=== Модуль аутентификации и авторизации
 
-Архитектура хранилища:
+Модуль обеспечивает полный цикл управления доступом. Основные функции включают:
+- регистрацию и аутентификацию пользователей;
+- генерацию и валидацию JWT токенов;
+- контроль доступа на основе ролей;
+- защиту эндпоинтов с проверкой прав доступа.
+
+Реализация использует следующие технологии и библиотеки:
+- FastAPI с зависимостями для инъекции текущего пользователя;
+- PyJWT для создания и верификации JWT токенов;
+- python-jose с алгоритмом HS256 для подписи токенов;
+- bcrypt для хеширования паролей с солью;
+- Pydantic для валидации данных аутентификации.
+
+=== Модуль управления пользователями
+
+Данный модуль отвечает за работу с учетными записями пользователей. Функциональность включает:
+- полный CRUD для пользователей;
+- управление ролями и профилями пользователей;
+- связи пользователей с проектами через модель TeamMember;
+- пагинацию и фильтрацию списка пользователей.
+
+Реализация основана на следующих технологиях:
+- SQLAlchemy ORM для объектно-реляционного отображения;
+- Alembic для миграций базы данных;
+- Pydantic схемах для сериализации и валидации;
+- FastAPI эндпоинтах с автоматической документацией.
+
+=== Модуль управления проектами
+
+Модуль предоставляет комплексное управление проектной деятельностью. Ключевые возможности:
+- CRUD операции для проектов, предметных областей, связей между проектами;
+- расширенный поиск и фильтрацию по названию, описанию, ключевым словам;
+- систему тегов с JSONB хранением в PostgreSQL;
+- иерархическую систему прав доступа к проектам.
+
+Для реализации используются следующие технологии:
+- SQLAlchemy с поддержкой JSONB для тегов;
+- PostgreSQL полнотекстовый поиск и индексы;
+- Pydantic с кастомными валидаторами для сложных структур;
+- FastAPI Query parameters для фильтрации.
+
+=== Модуль работы с файлами
+
+Организует работу с файловыми ресурсами проектов. Основные функции:
+- загрузку файлов в объектное хранилище MinIO;
+- хранение метаданных файлов в PostgreSQL;
+- скачивание файлов с контролем доступа;
+- обновление и удаление файлов;
+- проверку квот размера проекта.
+
+Реализация построена на следующих компонентах:
+- MinIO Python SDK для взаимодействия с объектным хранилищем;
+- SQLAlchemy для хранения метаданных файлов;
+- FastAPI UploadFile для обработки загрузок;
+- StreamingResponse для эффективной отдачи файлов.
+
+
+=== Архитектура хранилища
 - Реляционная БД PostgreSQL: Хранит структурированную информацию (пользователи, проекты, метаданные).
 - Объектное хранилище MinIO: Хранит файлы; принцип — загрузка через сервер, запись URL в БД, выдача pre-signed URL для доступа.
 
-Структура кода клиентского приложения:
+=== Структура кода клиентского приложения:
 - Страницы представляют собой компоненты Vue 3.
 - Переходы между страницами реализованы с помощью vue router, включая перенаправление на страницу входа для неавторизованных пользователей.
 - Связи между страницами — через ссылки router link.
@@ -87,6 +143,129 @@
 - Поток обработки запроса: Клиент отправляет запрос с JWT; сервер проверяет токен и права; передает в модуль; взаимодействует с БД/MinIO; возвращает ответ.
 
 == Примеры фрагментов кода (по необходимости)
+=== Модель пользователя
+
+#figure(
+  ```python
+  class User(Base):
+      __tablename__ = "users"
+      
+      id: int = Column(Integer, primary_key=True, index=True)
+      email: str = Column(String, unique=True, index=True)
+      hashed_password: str = Column(String)
+      full_name: str = Column(String)
+      role: str = Column(String)
+      created_at: datetime = Column(DateTime, default=datetime.utcnow)
+  ```,
+  caption: [Модель пользователя в SQLAlchemy],
+) <user-model>
+
+=== CRUD операции
+
+#figure(
+  ```python
+  def create_user(db: Session, user: UserCreate):
+      hashed_password = bcrypt.hash(user.password)
+      db_user = User(
+          email=user.email,
+          hashed_password=hashed_password,
+          full_name=user.full_name,
+          role=user.role
+      )
+      db.add(db_user)
+      db.commit()
+      db.refresh(db_user)
+      return db_user
+  ```,
+  caption: [Функция создания пользователя],
+) <create-user-function>
+
+=== API эндпоинт
+
+#figure(
+  ```python
+  @router.get("/projects/", response_model=List[ProjectRead])
+  def read_projects(
+      skip: int = 0,
+      limit: int = 100,
+      current_user: User = Depends(get_current_user),
+      db: Session = Depends(get_db)
+  ):
+      query = db.query(Project)
+
+      if current_user.role != "админ":
+          # Пользователь - не админ, фильтруем только публичные проекты или проекты, в которых он есть
+          subquery = db.query(TeamMember.project_id).filter(TeamMember.user_id == current_user.id).subquery()
+
+          query = query.filter(
+              (Project.is_public == True) |
+              (Project.id.in_(subquery))
+          )
+
+      projects = query.offset(skip).limit(limit).all()
+      return projects
+  ```,
+  caption: [Эндпоинт для получения списка проектов с фильтрацией по правам доступа],
+) <api-endpoint>
+
+=== Работа с файлами
+
+#figure(
+  ```python
+  def upload_file(file_data, file_name, content_type):
+      client = Minio(
+          "minio:9000",
+          access_key=MINIO_ACCESS_KEY,
+          secret_key=MINIO_SECRET_KEY,
+          secure=False
+      )
+      
+      client.put_object(
+          "projects",
+          file_name,
+          file_data,
+          length=len(file_data),
+          content_type=content_type
+      )
+      
+      return f"http://minio/projects/{file_name}"
+  ```,
+  caption: [Функция загрузки файла в MinIO],
+) <file-upload>
+
+=== Pydantic схемы
+
+#figure(
+  ```python
+  class UserCreate(BaseModel):
+      email: str = Field(..., regex=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+      password: str = Field(..., min_length=6)
+      full_name: str = Field(..., min_length=1)
+      role: str = Field(..., pattern="^(админ|участник)$")
+
+  class UserRead(BaseModel):
+      id: int
+      email: str
+      full_name: str
+      role: str
+      created_at: datetime
+  ```,
+  caption: [Pydantic схемы для валидации данных],
+) <pydantic-schemas>
+
+=== Аутентификация
+
+#figure(
+  ```python
+  def create_access_token(data: dict):
+      to_encode = data.copy()
+      expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+      to_encode.update({"exp": expire})
+      encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+      return encoded_jwt
+  ```,
+  caption: [Генерация JWT токена],
+) <jwt-token>
 
 == Преодоленные сложности и принятые технические решения
 - Выбор PostgreSQL и MinIO для удобного развертывания (Docker-образы) решает проблему развертывания на незнакомой инфраструктуре.

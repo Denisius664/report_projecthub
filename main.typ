@@ -41,7 +41,8 @@
 #include "parts/project_presentation.typ"
 #include "parts/tests.typ"
 #include "parts/approbation.typ"
-= Заключение
-Некоторый текст, относящийся к заключению
+#include "parts/conclusion.typ"
+#include "parts/sources.typ"
+#include "parts/work_schedule.typ"
 
-#bibliography("references.bib")
+//bibliography("references.bib")
