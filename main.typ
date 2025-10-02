@@ -40,7 +40,7 @@
 #include "parts/development.typ"
 #include "parts/project_presentation.typ"
 #include "parts/tests.typ"
-= Апробация / Внедрение
+#include "parts/approbation.typ"
 = Заключение
 Некоторый текст, относящийся к заключению
 
